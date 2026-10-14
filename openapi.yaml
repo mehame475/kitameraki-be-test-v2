@@ -1,0 +1,376 @@
+openapi: 3.0.3
+info:
+  title: Kitameraki Task API
+  version: 1.0.0
+  description: |
+    Task management API (Azure Functions + Cosmos DB).
+
+    **Authentication.** In Azure the Function App sits behind App Service authentication (Entra ID);
+    send `Authorization: Bearer <token>`. The organization is taken from the validated identity.
+    For local development only (`AUTH_MODE=header`) the organization is read from `x-organization-id`.
+servers:
+  - url: http://localhost:7071/api
+    description: Local (Azure Functions Core Tools)
+security:
+  - bearerAuth: []
+  - devOrganizationHeader: []
+tags:
+  - name: Tasks
+  - name: Form settings
+  - name: Health
+paths:
+  /tasks:
+    get:
+      tags: [Tasks]
+      operationId: GetTasks
+      summary: List the organization's tasks
+      responses:
+        '200':
+          description: All tasks of the organization
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Task' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+    post:
+      tags: [Tasks]
+      operationId: InsertTask
+      summary: Create a task
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateTask' }
+      responses:
+        '201':
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+  /tasks/{id}:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [Tasks]
+      operationId: GetTask
+      summary: Get a task
+      responses:
+        '200':
+          description: The task
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [Tasks]
+      operationId: UpdateTask
+      summary: Partially update a task
+      description: Send only the fields to change. `null` clears an optional field. Concurrent edits yield 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateTask' }
+      responses:
+        '200':
+          description: The updated task
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Task' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+    delete:
+      tags: [Tasks]
+      operationId: DeleteTask
+      summary: Delete a task
+      responses:
+        '204': { description: Deleted }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /tasks/bulk-delete:
+    post:
+      tags: [Tasks]
+      operationId: BulkDeleteTasks
+      summary: Delete several tasks (POST because DELETE bodies are unreliable through proxies)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BulkDeleteRequest' }
+      responses:
+        '200':
+          description: Which ids were deleted and which did not exist
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BulkDeleteResult' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+  /settings/task-form:
+    get:
+      tags: [Form settings]
+      operationId: GetFormSettings
+      summary: Get the task form layout
+      responses:
+        '200':
+          description: The saved layout
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FormSettings' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      tags: [Form settings]
+      operationId: SaveFormSettings
+      summary: Replace the task form layout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FormSettings' }
+      responses:
+        '200':
+          description: The saved layout
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FormSettings' }
+        '400': { $ref: '#/components/responses/ValidationError' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+  /health:
+    get:
+      tags: [Health]
+      operationId: Health
+      summary: Liveness probe
+      security: []
+      responses:
+        '200':
+          description: The process is running
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Status' }
+  /health/ready:
+    get:
+      tags: [Health]
+      operationId: HealthReady
+      summary: Readiness probe (checks Cosmos DB and both containers)
+      security: []
+      responses:
+        '200':
+          description: Dependencies are reachable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Status' }
+        '503':
+          description: A dependency is unavailable
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Status' }
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Entra ID token, validated by App Service authentication.
+    devOrganizationHeader:
+      type: apiKey
+      in: header
+      name: x-organization-id
+      description: Local development only (AUTH_MODE=header).
+  parameters:
+    TaskId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+  responses:
+    ValidationError:
+      description: Invalid request
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Unauthorized:
+      description: Missing or invalid credentials
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: The caller has no organization claim
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: The resource was modified concurrently; reload and retry
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PayloadTooLarge:
+      description: Body larger than 256 KB
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnsupportedMediaType:
+      description: Content-Type must be application/json
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+  schemas:
+    TaskStatus:
+      type: string
+      enum: [todo, in-progress, completed]
+    TaskPriority:
+      type: string
+      enum: [low, medium, high]
+    Task:
+      type: object
+      required: [id, organizationId, title, status]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        organizationId: { type: string, format: uuid, readOnly: true }
+        title: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 1000 }
+        dueDate: { type: string, format: date-time }
+        priority: { $ref: '#/components/schemas/TaskPriority' }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        tags:
+          type: array
+          maxItems: 50
+          items: { type: string, minLength: 1, maxLength: 50 }
+        customFields:
+          type: object
+          description: Values of custom form fields, keyed by field id. Validated against the form settings.
+          additionalProperties: { type: string, minLength: 1, maxLength: 1000 }
+    CreateTask:
+      type: object
+      additionalProperties: false
+      required: [title, status]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 1000 }
+        dueDate: { type: string, format: date-time }
+        priority: { $ref: '#/components/schemas/TaskPriority' }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        tags:
+          type: array
+          maxItems: 50
+          items: { type: string, minLength: 1, maxLength: 50 }
+        customFields:
+          type: object
+          additionalProperties: { type: string, minLength: 1, maxLength: 1000 }
+    UpdateTask:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      description: Optional fields accept null to clear them. title and status cannot be null.
+      properties:
+        title: { type: string, minLength: 1, maxLength: 100 }
+        description: { type: string, maxLength: 1000, nullable: true }
+        dueDate: { type: string, format: date-time, nullable: true }
+        priority: { type: string, enum: [low, medium, high], nullable: true }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        tags:
+          type: array
+          nullable: true
+          maxItems: 50
+          items: { type: string, minLength: 1, maxLength: 50 }
+        customFields:
+          type: object
+          nullable: true
+          additionalProperties: { type: string, minLength: 1, maxLength: 1000 }
+    BulkDeleteRequest:
+      type: object
+      additionalProperties: false
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { type: string, format: uuid }
+    BulkDeleteResult:
+      type: object
+      required: [deleted, notFound]
+      properties:
+        deleted: { type: array, items: { type: string } }
+        notFound: { type: array, items: { type: string } }
+    FormSettings:
+      type: object
+      additionalProperties: false
+      required: [rows]
+      properties:
+        rows:
+          type: array
+          minItems: 1
+          description: Unlimited rows (at most 100 fields in total).
+          items: { $ref: '#/components/schemas/FormRow' }
+    FormRow:
+      type: object
+      additionalProperties: false
+      required: [id, fields]
+      properties:
+        id: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+        fields:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items: { $ref: '#/components/schemas/FormField' }
+    FormField:
+      description: Every built-in field must appear exactly once; custom fields are optional.
+      oneOf:
+        - $ref: '#/components/schemas/BuiltinField'
+        - $ref: '#/components/schemas/CustomField'
+    BuiltinField:
+      type: object
+      additionalProperties: false
+      required: [id, label, kind, key]
+      properties:
+        id: { type: string, description: Must equal key }
+        label: { type: string, minLength: 1, maxLength: 100 }
+        kind: { type: string, enum: [builtin] }
+        key: { type: string, enum: [title, description, status, priority, dueDate, tags] }
+    CustomField:
+      type: object
+      additionalProperties: false
+      required: [id, label, kind, type]
+      properties:
+        id: { type: string, pattern: '^[A-Za-z0-9_-]{1,64}$' }
+        label: { type: string, minLength: 1, maxLength: 100 }
+        kind: { type: string, enum: [custom] }
+        type: { type: string, enum: [text, date, datetime, email] }
+    Status:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, unavailable] }
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+              enum: [validation_error, unauthorized, forbidden, not_found, conflict, payload_too_large, unsupported_media_type, internal_error]
+            message: { type: string }
+            details: { type: array, items: { type: string } }
+            requestId: { type: string, description: Also returned in the X-Request-Id header; quote it when reporting problems. }
